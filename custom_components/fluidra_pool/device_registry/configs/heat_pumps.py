@@ -15,7 +15,7 @@ from __future__ import annotations
 from ..types import DeviceConfig
 
 # Z250iQ/Z260iQ registers that carry live, still-undecoded values.
-Z250_RAW_REGISTERS: list[int] = [62, 63, 64, 65, 66, 68, 69, 70, 71, 72, 73, 74, 76, 77, 78, 79, 80]
+Z250_RAW_REGISTERS: list[int] = [60, 61, 62, 63, 64, 65, 66, 68, 69, 70, 71, 72, 73, 74, 76, 77, 78, 79, 80]
 
 HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
     "lg_heat_pump": DeviceConfig(
