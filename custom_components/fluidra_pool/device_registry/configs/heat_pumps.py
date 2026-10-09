@@ -14,8 +14,36 @@ from __future__ import annotations
 
 from ..types import DeviceConfig
 
-# Z250iQ/Z260iQ registers that carry live, still-undecoded values.
-Z250_RAW_REGISTERS: list[int] = [60, 61, 62, 63, 64, 65, 66, 68, 69, 70, 71, 72, 73, 74, 76, 77, 78, 79, 80]
+# Z250iQ/Z260iQ live registers decoded from a 6-hour trace on a Z250iQ TD9
+# (firmware 2.5.0, Boost heating, air 25 -> 17 degC). Each entry drives one
+# sensor through FluidraDecodedRegisterSensor; the `kind` picks unit, device
+# class and icon, `factor` scales the raw integer.
+#
+# Evidence, compressor off -> on: c60/c61 0 -> 82, c64 0 -> 760, c73 0 -> 65,
+# c77 0 -> 117 (all four live only with the compressor); c66 23.5 -> 9.7 degC
+# and then tracking outdoor air minus ~11 K (evaporator); c62 tracking outdoor
+# air minus ~0 K after the evaporator (suction line); c69 steady at water +1.8 K
+# while heating (outlet, matches ~15 kW at ~8 m3/h) and 42.6 degC while the
+# exchanger sat without flow; c72 41 -> 38 degC and c76 54 degC, the hottest
+# point (condenser and discharge). c73 at 6.0-6.5 A matches the 7.4 A nominal
+# on the rating plate; c65 varies 770-830 like a fan.
+Z250_DECODED_REGISTERS: dict[int, dict[str, object]] = {
+    60: {"key": "compressor_modulation", "name": "Compressor modulation", "kind": "percent"},
+    62: {"key": "suction_temperature", "name": "Suction temperature", "kind": "temperature", "factor": 0.1},
+    64: {"key": "compressor_frequency", "name": "Compressor frequency", "kind": "frequency", "factor": 0.1},
+    65: {"key": "fan_speed", "name": "Fan speed", "kind": "rpm"},
+    66: {"key": "evaporator_temperature", "name": "Evaporator temperature", "kind": "temperature", "factor": 0.1},
+    69: {"key": "outlet_water_temperature", "name": "Outlet water temperature", "kind": "temperature", "factor": 0.1},
+    72: {"key": "condenser_temperature", "name": "Condenser temperature", "kind": "temperature", "factor": 0.1},
+    73: {"key": "compressor_current", "name": "Compressor current", "kind": "current", "factor": 0.1},
+    76: {"key": "discharge_temperature", "name": "Discharge temperature", "kind": "temperature", "factor": 0.1},
+    77: {"key": "expansion_valve_steps", "name": "Expansion valve steps", "kind": "steps"},
+}
+
+# Still undecoded on the same trace: c74 (38-39 degC, flat), c80 (3 while
+# running, 11 while idle). c61 mirrors c60, c70 mirrors c66, c68 mirrors c19;
+# c63/c71/c78/c79 never moved (c71 = -300, an absent probe).
+Z250_RAW_REGISTERS: list[int] = [74, 80]
 
 HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
     "lg_heat_pump": DeviceConfig(
@@ -80,13 +108,25 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
             "min_temp": 7.0,
             "max_temp": 40.0,
             "temp_step": 1.0,
-            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82, *Z250_RAW_REGISTERS],
-            # Registers the cloud reports but nobody has decoded yet (live Z250iQ
-            # dump, firmware 2.5.0: c62=350, c65=440, c66=232, c68=269, c69=426,
-            # c70=364, c71=-300, c72=310, c74=415, c76=580, c78/79/80=10/12/11).
-            # Most look like x0.1 degC sensors (c68 tracks c19, c71=-30.0 reads
-            # like an absent probe). Exposed as diagnostic sensors so their
-            # history can be correlated with the unit's behaviour.
+            "specific_components": [
+                0,
+                7,
+                13,
+                14,
+                15,
+                17,
+                19,
+                28,
+                39,
+                67,
+                75,
+                81,
+                82,
+                *Z250_DECODED_REGISTERS,
+                *Z250_RAW_REGISTERS,
+            ],
+            "decoded_registers": Z250_DECODED_REGISTERS,
+            # Registers still undecoded, exposed verbatim as diagnostic sensors.
             "raw_registers": Z250_RAW_REGISTERS,
         },
         priority=95,
@@ -139,13 +179,25 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
             # - 67: Air temperature (×0.1)
             # - 81: Min setpoint (15°C, informational)
             # - 82: Max setpoint (40°C, informational)
-            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82, *Z250_RAW_REGISTERS],
-            # Registers the cloud reports but nobody has decoded yet (live Z250iQ
-            # dump, firmware 2.5.0: c62=350, c65=440, c66=232, c68=269, c69=426,
-            # c70=364, c71=-300, c72=310, c74=415, c76=580, c78/79/80=10/12/11).
-            # Most look like x0.1 degC sensors (c68 tracks c19, c71=-30.0 reads
-            # like an absent probe). Exposed as diagnostic sensors so their
-            # history can be correlated with the unit's behaviour.
+            "specific_components": [
+                0,
+                7,
+                13,
+                14,
+                15,
+                17,
+                19,
+                28,
+                39,
+                67,
+                75,
+                81,
+                82,
+                *Z250_DECODED_REGISTERS,
+                *Z250_RAW_REGISTERS,
+            ],
+            "decoded_registers": Z250_DECODED_REGISTERS,
+            # Registers still undecoded, exposed verbatim as diagnostic sensors.
             "raw_registers": Z250_RAW_REGISTERS,
         },
         priority=97,  # Higher than z250iq (95) and z550iq (96); component-7 check elevates further.

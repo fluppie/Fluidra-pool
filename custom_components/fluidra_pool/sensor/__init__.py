@@ -25,6 +25,7 @@ from .device import (
     FluidraCabinetPackedConfigSensor,
     FluidraCompressorHoursSensor,
     FluidraCompressorModulationSensor,
+    FluidraDecodedRegisterSensor,
     FluidraDeviceBatterySensor,
     FluidraDeviceInfoSensor,
     FluidraHeatPumpActivitySensor,
@@ -160,6 +161,15 @@ async def async_setup_entry(
 
         if DeviceIdentifier.should_create_entity(device, "sensor_running_hours"):
             entities.append(FluidraRunningHoursSensor(coordinator, coordinator.api, pool_id, device_id))
+
+        # Registers a profile has decoded (see e.g. Z250_DECODED_REGISTERS).
+        decoded = DeviceIdentifier.get_feature(device, "decoded_registers", {})
+        if isinstance(decoded, dict):
+            entities.extend(
+                FluidraDecodedRegisterSensor(coordinator, coordinator.api, pool_id, device_id, int(register), spec)
+                for register, spec in decoded.items()
+                if isinstance(spec, dict) and isinstance(register, int) and not isinstance(register, bool)
+            )
 
         # Undecoded registers a profile wants logged (reverse-engineering aid).
         raw_registers = DeviceIdentifier.get_feature(device, "raw_registers", [])

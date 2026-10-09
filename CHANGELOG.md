@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] (fork fluppie/Fluidra-pool)
+
+### Added
+
+- **Z250iQ / Z260iQ: ten decoded live registers as sensors.** From a 6-hour trace on a Z250iQ TD9
+  (firmware 2.5.0): compressor modulation (c60, %), suction temperature (c62), compressor frequency
+  (c64, Hz), fan speed (c65, rpm), evaporator temperature (c66), outlet water temperature (c69),
+  condenser temperature (c72), compressor current (c73, A), discharge temperature (c76) and
+  expansion-valve steps (c77). Profiles declare them in a `decoded_registers` table; a generic
+  `FluidraDecodedRegisterSensor` applies factor, unit and device class. c74 and c80 stay exposed as
+  "Unknown register" diagnostics; the constant or duplicated ones (c61, c63, c68, c70, c71, c78,
+  c79) are no longer created.
+
 ## [2.88.1] - 2026-10-06 (fork fluppie/Fluidra-pool, pending upstream PR)
 
 ### Fixed

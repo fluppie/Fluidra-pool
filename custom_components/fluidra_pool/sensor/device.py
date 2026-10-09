@@ -11,7 +11,10 @@ from homeassistant.components.climate.const import HVACAction
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     PERCENTAGE,
+    REVOLUTIONS_PER_MINUTE,
     EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfFrequency,
     UnitOfLength,
     UnitOfPower,
     UnitOfTemperature,
@@ -1103,3 +1106,75 @@ class FluidraRawRegisterSensor(FluidraPoolSensorEntity):
                 else None
             ),
         }
+
+
+# How a decoded register `kind` maps onto HA sensor metadata.
+_DECODED_KINDS: dict[str, dict[str, Any]] = {
+    "temperature": {
+        "device_class": SensorDeviceClass.TEMPERATURE,
+        "unit": UnitOfTemperature.CELSIUS,
+        "precision": 1,
+    },
+    "current": {
+        "device_class": SensorDeviceClass.CURRENT,
+        "unit": UnitOfElectricCurrent.AMPERE,
+        "precision": 1,
+    },
+    "frequency": {
+        "device_class": SensorDeviceClass.FREQUENCY,
+        "unit": UnitOfFrequency.HERTZ,
+        "precision": 1,
+    },
+    "percent": {"unit": PERCENTAGE, "icon": "mdi:gauge", "precision": 0},
+    "rpm": {"unit": REVOLUTIONS_PER_MINUTE, "icon": "mdi:fan", "precision": 0},
+    "steps": {"icon": "mdi:valve", "precision": 0},
+}
+
+
+class FluidraDecodedRegisterSensor(FluidraPoolSensorEntity):
+    """A device register whose meaning a profile has established.
+
+    Driven by the profile's ``decoded_registers`` table: ``{register: {key,
+    name, kind, factor?}}``. The raw ``reportedValue`` is multiplied by
+    ``factor`` and presented with the unit/device class of ``kind``.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: FluidraDataUpdateCoordinator,
+        api: FluidraPoolAPI,
+        pool_id: str,
+        device_id: str,
+        register: int,
+        spec: dict[str, Any],
+    ) -> None:
+        """Initialize a decoded register sensor."""
+        super().__init__(coordinator, api, pool_id, device_id, str(spec.get("key") or f"register_{register}"))
+        self._register = str(register)
+        self._factor = float(spec.get("factor", 1))
+        self._attr_name = str(spec.get("name") or f"Register {register}")
+        meta = _DECODED_KINDS.get(str(spec.get("kind")), {})
+        if "device_class" in meta:
+            self._attr_device_class = meta["device_class"]
+        if "unit" in meta:
+            self._attr_native_unit_of_measurement = meta["unit"]
+        if "icon" in meta:
+            self._attr_icon = meta["icon"]
+        self._attr_suggested_display_precision = meta.get("precision", 1)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the scaled register value when the cloud reports a number."""
+        components = self.device_data.get("components", {})
+        component = components.get(self._register) if isinstance(components, dict) else None
+        value = component.get("reportedValue") if isinstance(component, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return round(value * self._factor, 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Keep the register id visible for anyone cross-checking the decode."""
+        return {"register": int(self._register)}
