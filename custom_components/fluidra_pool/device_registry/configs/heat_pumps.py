@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from ..types import DeviceConfig
 
+# Z250iQ/Z260iQ registers that carry live, still-undecoded values.
+Z250_RAW_REGISTERS: list[int] = [62, 63, 64, 65, 66, 68, 69, 70, 71, 72, 73, 74, 76, 77, 78, 79, 80]
+
 HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
     "lg_heat_pump": DeviceConfig(
         device_type="heat_pump",
@@ -77,7 +80,14 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
             "min_temp": 7.0,
             "max_temp": 40.0,
             "temp_step": 1.0,
-            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82],
+            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82, *Z250_RAW_REGISTERS],
+            # Registers the cloud reports but nobody has decoded yet (live Z250iQ
+            # dump, firmware 2.5.0: c62=350, c65=440, c66=232, c68=269, c69=426,
+            # c70=364, c71=-300, c72=310, c74=415, c76=580, c78/79/80=10/12/11).
+            # Most look like x0.1 degC sensors (c68 tracks c19, c71=-30.0 reads
+            # like an absent probe). Exposed as diagnostic sensors so their
+            # history can be correlated with the unit's behaviour.
+            "raw_registers": Z250_RAW_REGISTERS,
         },
         priority=95,
     ),
@@ -129,7 +139,14 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
             # - 67: Air temperature (×0.1)
             # - 81: Min setpoint (15°C, informational)
             # - 82: Max setpoint (40°C, informational)
-            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82],
+            "specific_components": [0, 7, 13, 14, 15, 17, 19, 28, 39, 67, 75, 81, 82, *Z250_RAW_REGISTERS],
+            # Registers the cloud reports but nobody has decoded yet (live Z250iQ
+            # dump, firmware 2.5.0: c62=350, c65=440, c66=232, c68=269, c69=426,
+            # c70=364, c71=-300, c72=310, c74=415, c76=580, c78/79/80=10/12/11).
+            # Most look like x0.1 degC sensors (c68 tracks c19, c71=-30.0 reads
+            # like an absent probe). Exposed as diagnostic sensors so their
+            # history can be correlated with the unit's behaviour.
+            "raw_registers": Z250_RAW_REGISTERS,
         },
         priority=97,  # Higher than z250iq (95) and z550iq (96); component-7 check elevates further.
     ),

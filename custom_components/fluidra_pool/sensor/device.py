@@ -1045,3 +1045,61 @@ class FluidraHeatPumpActivitySensor(FluidraPoolSensorEntity):
         if action is None:
             return None
         return str(action.value)
+
+
+class FluidraRawRegisterSensor(FluidraPoolSensorEntity):
+    """Undecoded device register, exposed verbatim for reverse engineering.
+
+    Declared per profile under the ``raw_registers`` feature. The value is the
+    cloud's ``reportedValue`` with no factor applied; once a register is
+    understood it should get a proper sensor and leave this list.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:help-rhombus-outline"
+
+    def __init__(
+        self,
+        coordinator: FluidraDataUpdateCoordinator,
+        api: FluidraPoolAPI,
+        pool_id: str,
+        device_id: str,
+        register: int,
+    ) -> None:
+        """Initialize a raw register sensor."""
+        super().__init__(coordinator, api, pool_id, device_id, f"raw_register_{register}")
+        self._register = str(register)
+        self._attr_name = f"Unknown register {register}"
+
+    def _component(self) -> dict[str, Any] | None:
+        components = self.device_data.get("components", {})
+        component = components.get(self._register) if isinstance(components, dict) else None
+        return component if isinstance(component, dict) else None
+
+    @property
+    def native_value(self) -> int | float | None:
+        """Return the raw reported value when it is numeric."""
+        component = self._component()
+        value = component.get("reportedValue") if component else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the rest of the component block for correlation."""
+        component = self._component()
+        if not component:
+            return {}
+        return {
+            "register": int(self._register),
+            "desired_value": component.get("desiredValue"),
+            "timestamp": component.get("ts"),
+            "value_div10": (
+                component["reportedValue"] / 10
+                if isinstance(component.get("reportedValue"), (int, float))
+                and not isinstance(component.get("reportedValue"), bool)
+                else None
+            ),
+        }

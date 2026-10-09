@@ -35,6 +35,7 @@ from .device import (
     FluidraPumpPowerSensor,
     FluidraPumpScheduleSensor,
     FluidraPumpSpeedSensor,
+    FluidraRawRegisterSensor,
     FluidraRunningHoursSensor,
     FluidraScheduleDaysSensor,
     FluidraTemperatureSensor,
@@ -159,6 +160,15 @@ async def async_setup_entry(
 
         if DeviceIdentifier.should_create_entity(device, "sensor_running_hours"):
             entities.append(FluidraRunningHoursSensor(coordinator, coordinator.api, pool_id, device_id))
+
+        # Undecoded registers a profile wants logged (reverse-engineering aid).
+        raw_registers = DeviceIdentifier.get_feature(device, "raw_registers", [])
+        if isinstance(raw_registers, list):
+            entities.extend(
+                FluidraRawRegisterSensor(coordinator, coordinator.api, pool_id, device_id, int(register))
+                for register in raw_registers
+                if isinstance(register, int) and not isinstance(register, bool)
+            )
 
         if DeviceIdentifier.should_create_entity(device, "sensor_compressor_hours"):
             entities.append(FluidraCompressorHoursSensor(coordinator, coordinator.api, pool_id, device_id))
