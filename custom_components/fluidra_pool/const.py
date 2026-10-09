@@ -129,6 +129,10 @@ BULK_FETCH_FAILURE_LIMIT: Final = 3
 VICTORIA_OPTIMISTIC_TIMEOUT: Final = 120  # seconds
 # Heat pumps report back quickly; a short optimistic window avoids masking real state.
 CLIMATE_OPTIMISTIC_TIMEOUT: Final = 5  # seconds
+# ...but the cloud only reflects a write once the device reports it, which can
+# take a full poll cycle. The optimistic value is therefore held for up to two
+# poll cycles (or until a poll confirms it), never longer than this.
+CLIMATE_OPTIMISTIC_MAX_TIMEOUT: Final = 90  # seconds
 # tecnoLC2 chlorinator cells can take up to ~2 min to report a mode change back.
 CHLORINATOR_MODE_OPTIMISTIC_TIMEOUT: Final = 120  # seconds
 

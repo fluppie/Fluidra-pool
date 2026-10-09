@@ -455,8 +455,13 @@ class FluidraDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._process_component_state(device, str(pool_id), change.component_id, state)
                 self.realtime_changes += 1
                 # Push to the entities without a network round-trip: this is
-                # the whole point of the channel (Issue #210).
-                self.async_set_updated_data(data)
+                # the whole point of the channel (Issue #210). `data` was
+                # mutated in place, so only the listeners need a nudge:
+                # async_set_updated_data would also re-arm the poll timer,
+                # and a chatty register (compressor state, temperatures)
+                # could then postpone the REST poll — the declared source of
+                # truth, and the one that judges pending writes — indefinitely.
+                self.async_update_listeners()
                 return
 
     def _process_component_state(
@@ -654,7 +659,11 @@ class FluidraDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ):
                 try:
                     temp_value = float(temp_raw) / 10.0
-                    if 10.0 <= temp_value <= 50.0:
+                    # The Z250/Z260 family accepts setpoints down to 7 °C
+                    # (c81), so a 10 °C floor here left any lower setpoint
+                    # written but never read back. Only reject the plainly
+                    # impossible; the profile's min_temp bounds the UI.
+                    if 5.0 <= temp_value <= 50.0:
                         device["target_temperature"] = temp_value
                 except (ValueError, TypeError):
                     pass

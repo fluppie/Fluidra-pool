@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Z250iQ / Z260iQ: `climate.turn_on` no longer discards the preset.** HA's default turn-on picks
+  the first non-OFF mode (HEAT_COOL on this family) and so rewrote the mode register (c14) to
+  Smart H+C, silently dropping a Boost or Silence preset. It now writes the power register (c13)
+  only, exactly as the switch entity does and as the Z650iQ override already did.
+- **Z250iQ / Z260iQ: a pending preset reported the wrong HVAC mode.** While a preset write was
+  optimistic the entity showed HEAT — even for Smart/Boost/Silence *Cooling*, and even when the
+  unit was off (a c14 write does not switch c13 on). The mode is now derived from the pending
+  preset, with c13 deciding whether the unit is on at all.
+- **Heat pumps: optimistic state no longer snaps back before the device reports.** The cloud
+  echoes the previous reported value on the write response and on the refresh that follows it, so
+  the fixed 5-second optimistic window expired before anything had changed: ON → HEAT for 5 s →
+  OFF → ON again a poll later. Optimistic values are now held until a poll confirms them, bounded
+  by two poll cycles and capped at 90 s.
+- **Heat pumps: setpoints below 10 °C were written but never read back.** The Z250/Z260 accept
+  7 °C (c81), but the setpoint decoder rejected anything under 10 °C, so a winter setpoint stayed
+  stale in the UI.
+- **Heat pumps: the target-temperature sensor was never created.** It was gated on the setpoint
+  being present in the data at platform setup, which runs right after the fast first refresh —
+  before any component has been fetched. It is now gated on the profile's `temperature_control`
+  feature.
+- **Realtime pushes no longer postpone the REST poll.** A pushed change re-armed the coordinator's
+  refresh timer; a register that changes every few seconds (compressor state, temperatures) could
+  delay the poll — the source of truth, and what judges pending writes — indefinitely. Listeners
+  are now notified in place without touching the timer.
+
 ## [2.88.0] - 2026-09-26
 
 ### Added

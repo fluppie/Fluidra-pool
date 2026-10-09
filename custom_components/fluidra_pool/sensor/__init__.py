@@ -138,7 +138,11 @@ async def async_setup_entry(
 
         if DeviceIdentifier.should_create_entity(device, "sensor_temperature"):
             # Temperature sensors for heaters / heat pumps.
-            if "target_temperature" in device:
+            # Gate on the profile, not on the data: platform setup runs right
+            # after the fast first refresh, which fetches no components yet,
+            # so `"target_temperature" in device` was False for every heat
+            # pump at that point and the sensor never appeared.
+            if "target_temperature" in device or DeviceIdentifier.has_feature(device, "temperature_control"):
                 entities.append(FluidraTemperatureSensor(coordinator, coordinator.api, pool_id, device_id, "target"))
             # Z550iQ+ heat pump specific temperature sensors
             if DeviceIdentifier.has_feature(device, "z550_mode"):

@@ -9,6 +9,7 @@ async_setup_entry.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -28,6 +29,7 @@ from custom_components.fluidra_pool.climate import (
     async_setup_entry,
 )
 from custom_components.fluidra_pool.const import (
+    CLIMATE_OPTIMISTIC_MAX_TIMEOUT,
     LG_PRESET_BOOST_COOLING,
     LG_PRESET_SMART_COOLING,
     LG_PRESET_SMART_HEAT_COOL,
@@ -1164,12 +1166,77 @@ async def test_z650iq_turn_on_read_only_pool_sends_no_commands() -> None:
     api.control_device_component.assert_not_awaited()
 
 
-async def test_z260iq_turn_on_keeps_home_assistant_default_mode_selection() -> None:
-    """The Z650 power-only override must not change another family's turn-on."""
-    climate = _make(_pin(features={"z260iq_mode": True, "preset_modes": True}))
+@pytest.mark.parametrize("mode_value", [3, 4, 5, 6])
+async def test_z260iq_turn_on_preserves_preset(mode_value: int) -> None:
+    """turn_on writes the power register only: a Boost/Silence preset survives.
+
+    HA's default turn_on picks HEAT_COOL (the first non-OFF mode) and so
+    rewrote c14 to Smart H+C, silently discarding the preset the user chose.
+    """
+    api = _api()
+    climate = _make(
+        _pin(features={"z260iq_mode": True, "preset_modes": True}, heat_pump_reported=0, z260iq_mode_value=mode_value),
+        api,
+    )
     with patch.object(climate, "async_set_hvac_mode", new_callable=AsyncMock) as set_mode:
         await climate.async_turn_on()
-    set_mode.assert_awaited_once_with(HVACMode.HEAT_COOL)
+    set_mode.assert_not_awaited()
+    api.start_pump.assert_awaited_once_with(DEVICE_ID)
+    api.control_device_component.assert_not_awaited()
+
+
+def test_z260iq_pending_preset_cooling_reports_cool_not_heat() -> None:
+    """A pending Smart Cooling preset must not show the unit as HEAT."""
+    climate = _make(_pin(features={"z260iq_mode": True, "preset_modes": True}, heat_pump_reported=1))
+    climate._pending_preset_mode = LG_PRESET_SMART_COOLING
+    with patch(TIME_MOD) as mock_time:
+        climate._last_preset_action_time = 1000.0
+        mock_time.time.return_value = 1001.0
+        assert climate.hvac_mode == HVACMode.COOL
+
+
+def test_z260iq_pending_preset_does_not_turn_an_off_unit_on() -> None:
+    """A c14-only write leaves c13 alone: an OFF unit stays OFF."""
+    climate = _make(_pin(features={"z260iq_mode": True, "preset_modes": True}, heat_pump_reported=0))
+    climate._pending_preset_mode = LG_PRESET_SMART_HEATING
+    with patch(TIME_MOD) as mock_time:
+        climate._last_preset_action_time = 1000.0
+        mock_time.time.return_value = 1001.0
+        assert climate.hvac_mode == HVACMode.OFF
+
+
+def test_pending_hvac_mode_clears_as_soon_as_the_device_confirms() -> None:
+    climate = _make(_pin(features={"z260iq_mode": True}, heat_pump_reported=1, z260iq_mode_value=1))
+    climate._pending_hvac_mode = HVACMode.COOL
+    with patch(TIME_MOD) as mock_time:
+        climate._last_hvac_action_time = 1000.0
+        mock_time.time.return_value = 1001.0
+        assert climate.hvac_mode == HVACMode.COOL
+    assert climate._pending_hvac_mode is None  # confirmed, not merely expired
+
+
+def test_optimistic_window_follows_the_poll_interval() -> None:
+    """The cloud echoes the old value until the device reports: hold for two polls."""
+    climate = _make(_pin(features={"z260iq_mode": True}, heat_pump_reported=0))
+    climate.coordinator.update_interval = timedelta(seconds=30)
+    climate._pending_hvac_mode = HVACMode.HEAT
+    with patch(TIME_MOD) as mock_time:
+        climate._last_hvac_action_time = 1000.0
+        mock_time.time.return_value = 1010.0  # past the old 5 s window
+        assert climate.hvac_mode == HVACMode.HEAT
+        mock_time.time.return_value = 1061.0  # past 2 × 30 s
+        assert climate.hvac_mode == HVACMode.OFF
+    assert climate._pending_hvac_mode is None
+
+
+def test_optimistic_window_is_capped() -> None:
+    climate = _make(_pin(features={"z260iq_mode": True}, heat_pump_reported=0))
+    climate.coordinator.update_interval = timedelta(minutes=30)
+    climate._pending_hvac_mode = HVACMode.HEAT
+    with patch(TIME_MOD) as mock_time:
+        climate._last_hvac_action_time = 1000.0
+        mock_time.time.return_value = 1000.0 + CLIMATE_OPTIMISTIC_MAX_TIMEOUT + 1
+        assert climate.hvac_mode == HVACMode.OFF
 
 
 def test_extra_state_attributes_z650iq_branch() -> None:

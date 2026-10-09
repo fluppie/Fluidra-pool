@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .api_resilience import FluidraError
 from .climate_behaviors import Z260iqBehavior, Z550Behavior, Z650iqBehavior, resolve_behavior
 from .const import (
+    CLIMATE_OPTIMISTIC_MAX_TIMEOUT,
     CLIMATE_OPTIMISTIC_TIMEOUT,
     DOMAIN,
     HEAT_COOL_ACTION_DEADBAND,
@@ -131,9 +133,7 @@ class FluidraHeatPumpClimate(FluidraPoolControlEntity, ClimateEntity):
         # non-step-aligned service call) can't pin the UI to a stale setpoint.
         if self._pending_temperature is not None:
             confirmed = actual_temp is not None and abs(actual_temp - self._pending_temperature) < 0.05
-            expired = (
-                self._last_action_time is not None and time.time() - self._last_action_time > CLIMATE_OPTIMISTIC_TIMEOUT
-            )
+            expired = self._optimistic_expired(self._last_action_time)
             if confirmed or expired:
                 self._pending_temperature = None
                 self._last_action_time = None
@@ -192,14 +192,19 @@ class FluidraHeatPumpClimate(FluidraPoolControlEntity, ClimateEntity):
         """Return current preset mode for heat pumps with this feature."""
         device_data = self.device_data
 
-        # Check for pending optimistic preset mode first
+        # Check for pending optimistic preset mode first: hold it until the
+        # device reports the same preset, or the window runs out.
         if self._pending_preset_mode is not None and self._last_preset_action_time is not None:
-            # Clear pending mode after 5 seconds
-            if time.time() - self._last_preset_action_time > CLIMATE_OPTIMISTIC_TIMEOUT:
+            reported = self._reported_preset_mode(device_data)
+            if reported == self._pending_preset_mode or self._optimistic_expired(self._last_preset_action_time):
                 self._pending_preset_mode = None
                 self._last_preset_action_time = None
             else:
                 return self._pending_preset_mode
+        return self._reported_preset_mode(device_data)
+
+    def _reported_preset_mode(self, device_data: dict[str, Any]) -> str | None:
+        """Return the preset the device itself reports (no optimistic state)."""
 
         # No controllable preset for devices without preset_modes (e.g. Z550iQ+).
         if not DeviceIdentifier.has_feature(device_data, "preset_modes") and not DeviceIdentifier.has_feature(
@@ -227,14 +232,39 @@ class FluidraHeatPumpClimate(FluidraPoolControlEntity, ClimateEntity):
     def hvac_mode(self) -> HVACMode | None:
         """Return current hvac operation mode."""
 
-        # Check for pending optimistic HVAC mode first
+        # Check for pending optimistic HVAC mode first: hold it until the
+        # device reports the same mode, or the window runs out.
         if self._pending_hvac_mode is not None and self._last_hvac_action_time is not None:
-            if time.time() - self._last_hvac_action_time > CLIMATE_OPTIMISTIC_TIMEOUT:
+            reported = self._reported_hvac_mode()
+            if reported == self._pending_hvac_mode or self._optimistic_expired(self._last_hvac_action_time):
                 self._pending_hvac_mode = None
                 self._last_hvac_action_time = None
             else:
                 return self._pending_hvac_mode
+        return self._reported_hvac_mode()
 
+    def _optimistic_expired(self, started_at: float | None) -> bool:
+        """Return True once an optimistic value has outlived its window.
+
+        The cloud echoes the *previous* reportedValue on the write response
+        and on the refresh that follows it (Issue #133 lineage), so a fixed
+        5-second window ends before the device has reported anything: the
+        entity visibly snaps back to the old state and flips again on a later
+        poll. Give the device two poll cycles — a realtime push, when enabled,
+        confirms (and clears) the value long before that — capped so a write
+        the device dropped cannot pin the UI for long.
+        """
+        if started_at is None:
+            # No timestamp: the value is held until a poll confirms it.
+            return False
+        window: float = CLIMATE_OPTIMISTIC_TIMEOUT
+        interval = getattr(self.coordinator, "update_interval", None)
+        if isinstance(interval, timedelta):
+            window = max(window, min(2 * interval.total_seconds(), CLIMATE_OPTIMISTIC_MAX_TIMEOUT))
+        return time.time() - started_at > window
+
+    def _reported_hvac_mode(self) -> HVACMode | None:
+        """Return the HVAC mode derived from device data (no optimistic mode)."""
         device_data = self.device_data
         behavior = resolve_behavior(device_data)
         if isinstance(behavior, Z650iqBehavior):
@@ -243,6 +273,15 @@ class FluidraHeatPumpClimate(FluidraPoolControlEntity, ClimateEntity):
             preset = self.preset_mode
             if self._pending_preset_mode is not None:
                 return behavior.hvac_mode({**device_data, "z260iq_mode_value": Z650_MODE_TO_VALUE.get(preset or "")})
+            return behavior.hvac_mode(device_data)
+
+        if isinstance(behavior, Z260iqBehavior):
+            # Same rule as the Z650: a pending preset is a c14-only write, so
+            # derive the mode from it (Smart Cooling is COOL, not HEAT) and
+            # let c13 decide whether the unit is on at all.
+            preset = self.preset_mode
+            if self._pending_preset_mode is not None and preset in LG_MODE_TO_VALUE:
+                return behavior.hvac_mode({**device_data, "z260iq_mode_value": LG_MODE_TO_VALUE[preset]})
             return behavior.hvac_mode(device_data)
 
         # Preserve the existing optimistic behavior of the other families.
@@ -285,8 +324,15 @@ class FluidraHeatPumpClimate(FluidraPoolControlEntity, ClimateEntity):
         return "mdi:heat-pump-outline"
 
     async def async_turn_on(self) -> None:
-        """Enable Z650iQ without HA's default turn-on selecting Smart+."""
-        if not isinstance(resolve_behavior(self.device_data), Z650iqBehavior):
+        """Enable the unit without HA's default turn-on picking a mode.
+
+        HA's default ``turn_on`` selects the first non-OFF mode it supports —
+        HEAT_COOL on the Z260/Z250 family — and so rewrites c14 to Smart
+        H+C, discarding a Boost or Silence preset the user had chosen. The
+        on/off register (c13) is independent of the mode register (c14), so
+        turning on only needs c13=1, exactly as the switch entity does.
+        """
+        if not isinstance(resolve_behavior(self.device_data), (Z650iqBehavior, Z260iqBehavior)):
             await super().async_turn_on()
             return
         self._ensure_pool_writable()

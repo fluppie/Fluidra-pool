@@ -286,6 +286,7 @@ def _coordinator(options: dict[str, Any] | None = None) -> Any:
     coordinator._realtime = None
     coordinator.realtime_changes = 0
     coordinator.async_set_updated_data = MagicMock()
+    coordinator.async_update_listeners = MagicMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.data = {
         "pool-1": {
@@ -326,7 +327,10 @@ async def test_pushed_change_updates_the_component_and_notifies() -> None:
     assert device["components"]["11"]["reportedValue"] == 2
     assert device["components"]["11"]["ts"] == 1787767038
     assert coordinator.realtime_changes == 1
-    coordinator.async_set_updated_data.assert_called_once_with(coordinator.data)
+    # Listeners are notified in place; the poll timer must not be re-armed
+    # by a push, or a chatty register could starve the REST poll.
+    coordinator.async_update_listeners.assert_called_once_with()
+    coordinator.async_set_updated_data.assert_not_called()
 
 
 async def test_pushed_change_keeps_the_polled_desired_value() -> None:
@@ -359,6 +363,7 @@ async def test_change_for_an_unknown_device_is_ignored() -> None:
 
     assert coordinator.realtime_changes == 0
     coordinator.async_set_updated_data.assert_not_called()
+    coordinator.async_update_listeners.assert_not_called()
 
 
 async def test_change_before_the_first_poll_is_ignored() -> None:
