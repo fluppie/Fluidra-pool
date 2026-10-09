@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import time, timedelta
 import logging
+import time as _time
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -1331,3 +1333,110 @@ class FluidraEstimatedSensor(FluidraPoolSensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Show the assumptions so the number can be judged."""
         return {"assumptions": dict(self._params), "estimate": True}
+
+
+# Window over which the water temperature slope is fitted. The cloud reports
+# the inlet in 0.1 K steps, so a few minutes show nothing; two hours of
+# 30-second samples give a usable least-squares slope.
+HEAT_BALANCE_WINDOW_S = 2 * 3600
+HEAT_BALANCE_MIN_SPAN_S = 45 * 60
+
+
+class FluidraPoolHeatBalanceSensor(FluidraPoolSensorEntity):
+    """Net heat the pool is losing (positive) or gaining (negative), in kW.
+
+    heat loss = heat the pump delivers - heat the water actually stores
+             = thermal_power - volume * 1.163 kWh/(m3.K) * dT/dt
+
+    ``thermal_power`` is the profile's estimated thermal power; ``volume``
+    is what the owner entered in the Fluidra app (pool characteristics ->
+    dimensions -> volume), so the sensor is unavailable until that is set.
+    dT/dt is a least-squares slope of the inlet water temperature over the
+    last two hours of polls, kept in memory by this entity.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_icon = "mdi:waves-arrow-up"
+    _attr_name = "Pool heat loss (estimated)"
+
+    def __init__(
+        self,
+        coordinator: FluidraDataUpdateCoordinator,
+        api: FluidraPoolAPI,
+        pool_id: str,
+        device_id: str,
+        thermal_spec: dict[str, Any],
+        params: dict[str, Any],
+    ) -> None:
+        """Initialize the heat balance sensor."""
+        super().__init__(coordinator, api, pool_id, device_id, "pool_heat_loss_estimated")
+        self._thermal = FluidraEstimatedSensor(coordinator, api, pool_id, device_id, "_", thermal_spec, params)
+        self._samples: deque[tuple[float, float]] = deque()
+
+    def _pool_volume(self) -> float | None:
+        dims = (self.pool_data.get("characteristics") or {}).get("dimensions") or {}
+        volume = dims.get("volume")
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)) or volume <= 0:
+            return None
+        return float(volume)
+
+    def _record(self) -> None:
+        temp = self.device_data.get("water_temperature")
+        if isinstance(temp, bool) or not isinstance(temp, (int, float)):
+            return
+        now = _time.monotonic()
+        if self._samples and self._samples[-1][0] == now:
+            return
+        self._samples.append((now, float(temp)))
+        while self._samples and now - self._samples[0][0] > HEAT_BALANCE_WINDOW_S:
+            self._samples.popleft()
+
+    def _slope_k_per_h(self) -> float | None:
+        """Least-squares slope of the stored samples, in K/h."""
+        if len(self._samples) < 3:
+            return None
+        t0 = self._samples[0][0]
+        if self._samples[-1][0] - t0 < HEAT_BALANCE_MIN_SPAN_S:
+            return None
+        n = len(self._samples)
+        xs = [(t - t0) / 3600.0 for t, _ in self._samples]
+        ys = [v for _, v in self._samples]
+        mx, my = sum(xs) / n, sum(ys) / n
+        sxx = sum((x - mx) ** 2 for x in xs)
+        if sxx == 0:
+            return None
+        return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / sxx
+
+    def _handle_coordinator_update(self) -> None:
+        self._record()
+        super()._handle_coordinator_update()
+
+    async def async_added_to_hass(self) -> None:
+        """Seed the window with the current sample."""
+        await super().async_added_to_hass()
+        self._record()
+
+    @property
+    def native_value(self) -> float | None:
+        """Return thermal input minus stored heat, or None while warming up."""
+        volume = self._pool_volume()
+        thermal = self._thermal.native_value
+        slope = self._slope_k_per_h()
+        if volume is None or thermal is None or slope is None:
+            return None
+        return round(thermal - volume * WATER_KWH_PER_M3_K * slope, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the inputs so the number can be checked."""
+        slope = self._slope_k_per_h()
+        return {
+            "pool_volume_m3": self._pool_volume(),
+            "water_temperature_slope_k_per_h": round(slope, 3) if slope is not None else None,
+            "thermal_power_kw": self._thermal.native_value,
+            "samples_in_window": len(self._samples),
+            "hint": None if self._pool_volume() else "Set the pool volume in the Fluidra app (pool settings)",
+            "estimate": True,
+        }

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pool heat loss (estimated).** Thermal power minus the heat the water actually stores
+  (`volume × 1.163 kWh/(m³·K) × dT/dt`, slope fitted over the last two hours of polls). Positive
+  means the pool is losing heat faster than the pump delivers, negative means it gains (sun). Uses
+  the pool volume entered in the Fluidra app; unavailable until that is set.
 - **Z250iQ / Z260iQ: delta T, condenser approach, and estimated power / COP.** `Water delta T`
   (outlet c69 minus inlet c19) and `Condenser approach` (condensing c74 minus outlet) come from a
   profile-declared `derived_sensors` table. `Thermal power (estimated)`, `Electric power

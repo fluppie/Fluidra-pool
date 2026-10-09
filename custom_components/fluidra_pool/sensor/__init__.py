@@ -32,6 +32,7 @@ from .device import (
     FluidraEstimatedSensor,
     FluidraHeatPumpActivitySensor,
     FluidraLightBrightnessSensor,
+    FluidraPoolHeatBalanceSensor,
     FluidraPumpActivitySensor,
     FluidraPumpFlowSensor,
     FluidraPumpHeadSensor,
@@ -191,6 +192,21 @@ async def async_setup_entry(
                 for key, spec in estimated.items()
                 if isinstance(spec, dict) and "formula" in spec
             )
+
+        # Pool heat balance: needs an estimated thermal power and the pool volume.
+        if isinstance(estimated, dict) and isinstance(params, dict):
+            thermal_spec = next(
+                (
+                    spec
+                    for spec in estimated.values()
+                    if isinstance(spec, dict) and spec.get("formula") == "thermal_power"
+                ),
+                None,
+            )
+            if thermal_spec is not None:
+                entities.append(
+                    FluidraPoolHeatBalanceSensor(coordinator, coordinator.api, pool_id, device_id, thermal_spec, params)
+                )
 
         # Undecoded registers a profile wants logged (reverse-engineering aid).
         raw_registers = DeviceIdentifier.get_feature(device, "raw_registers", [])
