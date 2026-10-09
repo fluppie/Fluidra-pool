@@ -34,16 +34,23 @@ Z250_DECODED_REGISTERS: dict[int, dict[str, object]] = {
     65: {"key": "fan_speed", "name": "Fan speed", "kind": "rpm"},
     66: {"key": "evaporator_temperature", "name": "Evaporator temperature", "kind": "temperature", "factor": 0.1},
     69: {"key": "outlet_water_temperature", "name": "Outlet water temperature", "kind": "temperature", "factor": 0.1},
-    72: {"key": "condenser_temperature", "name": "Condenser temperature", "kind": "temperature", "factor": 0.1},
+    # c72 swings 30 -> 41 degC with outdoor air and sun while the water stays
+    # within 1 K, so it is not the condenser: it reads like the inverter /
+    # control board heatsink (ambient + 15-20 K). Named with that caveat.
+    72: {"key": "inverter_temperature", "name": "Inverter temperature", "kind": "temperature", "factor": 0.1},
     73: {"key": "compressor_current", "name": "Compressor current", "kind": "current", "factor": 0.1},
+    # c74 sits at 38-39.5 degC all day, ~9-10 K above the outlet water and
+    # correlating only with the discharge temperature (r=0.71 over 30 h):
+    # the condensing temperature the control loop holds.
+    74: {"key": "condensing_temperature", "name": "Condensing temperature", "kind": "temperature", "factor": 0.1},
     76: {"key": "discharge_temperature", "name": "Discharge temperature", "kind": "temperature", "factor": 0.1},
     77: {"key": "expansion_valve_steps", "name": "Expansion valve steps", "kind": "steps"},
 }
 
-# Still undecoded on the same trace: c74 (38-39 degC, flat), c80 (3 while
-# running, 11 while idle). c61 mirrors c60, c70 mirrors c66, c68 mirrors c19;
+# Still undecoded on the same trace: c80 (3 while heating, 11 while idle;
+# a state code, more states needed). c61 mirrors c60, c70 mirrors c66, c68 mirrors c19;
 # c63/c71/c78/c79 never moved (c71 = -300, an absent probe).
-Z250_RAW_REGISTERS: list[int] = [74, 80]
+Z250_RAW_REGISTERS: list[int] = [80]
 
 HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
     "lg_heat_pump": DeviceConfig(
