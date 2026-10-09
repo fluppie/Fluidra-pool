@@ -47,6 +47,65 @@ Z250_DECODED_REGISTERS: dict[int, dict[str, object]] = {
     77: {"key": "expansion_valve_steps", "name": "Expansion valve steps", "kind": "steps"},
 }
 
+# Differences between two decoded registers, exposed as their own sensors.
+# `minuend` and `subtrahend` are register ids; both are x0.1 degC here.
+Z250_DERIVED_SENSORS: dict[str, dict[str, object]] = {
+    # Outlet minus inlet water: 1.5-1.9 K at 8 m3/h on a live unit. Too low
+    # means too much flow through the exchanger, too high too little (dirty
+    # filter, bypass closed too far).
+    "water_delta_t": {
+        "name": "Water delta T",
+        "kind": "temperature_delta",
+        "minuend": 69,
+        "subtrahend": 19,
+        "factor": 0.1,
+    },
+    # Condensing minus outlet water: the exchanger's approach (~9.5 K when
+    # clean). Creeping up over the seasons points at scale in the titanium coil.
+    "condenser_approach": {
+        "name": "Condenser approach",
+        "kind": "temperature_delta",
+        "minuend": 74,
+        "subtrahend": 69,
+        "factor": 0.1,
+    },
+}
+
+# Estimated power and COP. All three rest on assumptions a user may need to
+# adjust: the water flow through the exchanger (Fluidra's recommended 8 m3/h,
+# what the measured 1.5-1.9 K delta T implies), the supply (400 V, 3 phases)
+# and the inverter's power factor (~0.9 with active PFC). Named "estimated"
+# so nobody mistakes them for metered values.
+Z250_ESTIMATE_PARAMS: dict[str, float] = {
+    "flow_m3h": 8.0,
+    "voltage": 400.0,
+    "phases": 3,
+    "power_factor": 0.9,
+}
+Z250_ESTIMATED_SENSORS: dict[str, dict[str, object]] = {
+    # delta T (c69 - c19, x0.1) * flow * 1.163 kWh/(m3.K)
+    "thermal_power_estimated": {
+        "name": "Thermal power (estimated)",
+        "formula": "thermal_power",
+        "minuend": 69,
+        "subtrahend": 19,
+        "factor": 0.1,
+    },
+    # c73 (x0.1 A) * V * sqrt(3) * cos phi
+    "electric_power_estimated": {
+        "name": "Electric power (estimated)",
+        "formula": "electric_power",
+        "current": 73,
+        "factor": 0.1,
+    },
+    "cop_estimated": {
+        "name": "COP (estimated)",
+        "formula": "cop",
+        "thermal": "thermal_power_estimated",
+        "electric": "electric_power_estimated",
+    },
+}
+
 # Still undecoded on the same trace: c80 (3 while heating, 11 while idle;
 # a state code, more states needed). c61 mirrors c60, c70 mirrors c66, c68 mirrors c19;
 # c63/c71/c78/c79 never moved (c71 = -300, an absent probe).
@@ -133,6 +192,9 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
                 *Z250_RAW_REGISTERS,
             ],
             "decoded_registers": Z250_DECODED_REGISTERS,
+            "derived_sensors": Z250_DERIVED_SENSORS,
+            "estimate_params": Z250_ESTIMATE_PARAMS,
+            "estimated_sensors": Z250_ESTIMATED_SENSORS,
             # Registers still undecoded, exposed verbatim as diagnostic sensors.
             "raw_registers": Z250_RAW_REGISTERS,
         },
@@ -204,6 +266,9 @@ HEAT_PUMP_CONFIGS: dict[str, DeviceConfig] = {
                 *Z250_RAW_REGISTERS,
             ],
             "decoded_registers": Z250_DECODED_REGISTERS,
+            "derived_sensors": Z250_DERIVED_SENSORS,
+            "estimate_params": Z250_ESTIMATE_PARAMS,
+            "estimated_sensors": Z250_ESTIMATED_SENSORS,
             # Registers still undecoded, exposed verbatim as diagnostic sensors.
             "raw_registers": Z250_RAW_REGISTERS,
         },

@@ -1125,6 +1125,12 @@ _DECODED_KINDS: dict[str, dict[str, Any]] = {
         "unit": UnitOfFrequency.HERTZ,
         "precision": 1,
     },
+    "temperature_delta": {
+        "device_class": SensorDeviceClass.TEMPERATURE,
+        "unit": UnitOfTemperature.KELVIN,
+        "icon": "mdi:delta",
+        "precision": 1,
+    },
     "percent": {"unit": PERCENTAGE, "icon": "mdi:gauge", "precision": 0},
     "rpm": {"unit": REVOLUTIONS_PER_MINUTE, "icon": "mdi:fan", "precision": 0},
     "steps": {"icon": "mdi:valve", "precision": 0},
@@ -1178,3 +1184,150 @@ class FluidraDecodedRegisterSensor(FluidraPoolSensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Keep the register id visible for anyone cross-checking the decode."""
         return {"register": int(self._register)}
+
+
+class FluidraDerivedRegisterSensor(FluidraPoolSensorEntity):
+    """The difference between two registers, e.g. outlet minus inlet water.
+
+    Driven by the profile's ``derived_sensors`` table: ``{key: {name, kind,
+    minuend, subtrahend, factor?}}``. Unavailable while either register is
+    missing, so a half-updated poll never shows a bogus difference.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: FluidraDataUpdateCoordinator,
+        api: FluidraPoolAPI,
+        pool_id: str,
+        device_id: str,
+        key: str,
+        spec: dict[str, Any],
+    ) -> None:
+        """Initialize a derived register sensor."""
+        super().__init__(coordinator, api, pool_id, device_id, key)
+        self._minuend = str(spec["minuend"])
+        self._subtrahend = str(spec["subtrahend"])
+        self._factor = float(spec.get("factor", 1))
+        self._attr_name = str(spec.get("name") or key)
+        meta = _DECODED_KINDS.get(str(spec.get("kind")), {})
+        if "device_class" in meta:
+            self._attr_device_class = meta["device_class"]
+        if "unit" in meta:
+            self._attr_native_unit_of_measurement = meta["unit"]
+        if "icon" in meta:
+            self._attr_icon = meta["icon"]
+        self._attr_suggested_display_precision = meta.get("precision", 1)
+
+    def _raw(self, register: str) -> float | None:
+        components = self.device_data.get("components", {})
+        component = components.get(register) if isinstance(components, dict) else None
+        value = component.get("reportedValue") if isinstance(component, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    @property
+    def available(self) -> bool:
+        """Both operands must be reported."""
+        return super().available and self._raw(self._minuend) is not None and self._raw(self._subtrahend) is not None
+
+    @property
+    def native_value(self) -> float | None:
+        """Return (minuend - subtrahend) * factor."""
+        a, b = self._raw(self._minuend), self._raw(self._subtrahend)
+        if a is None or b is None:
+            return None
+        return round((a - b) * self._factor, 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Name the registers behind the difference."""
+        return {"minuend_register": int(self._minuend), "subtrahend_register": int(self._subtrahend)}
+
+
+WATER_KWH_PER_M3_K = 1.163  # specific heat of water, kWh per m3 per kelvin
+
+
+class FluidraEstimatedSensor(FluidraPoolSensorEntity):
+    """Thermal power, electric power or COP estimated from live registers.
+
+    Driven by the profile's ``estimated_sensors`` table and
+    ``estimate_params`` (flow, voltage, phases, power factor). These are
+    estimates, not meter readings: the flow in particular is the value the
+    manufacturer recommends, not a measurement.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: FluidraDataUpdateCoordinator,
+        api: FluidraPoolAPI,
+        pool_id: str,
+        device_id: str,
+        key: str,
+        spec: dict[str, Any],
+        params: dict[str, Any],
+    ) -> None:
+        """Initialize an estimated sensor."""
+        super().__init__(coordinator, api, pool_id, device_id, key)
+        self._spec = spec
+        self._params = params
+        self._attr_name = str(spec.get("name") or key)
+        formula = str(spec.get("formula"))
+        if formula in ("thermal_power", "electric_power"):
+            self._attr_device_class = SensorDeviceClass.POWER
+            self._attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+            self._attr_suggested_display_precision = 2
+            self._attr_icon = "mdi:heat-wave" if formula == "thermal_power" else "mdi:flash"
+        else:
+            self._attr_icon = "mdi:chart-bell-curve"
+            self._attr_suggested_display_precision = 2
+
+    def _raw(self, register: Any) -> float | None:
+        components = self.device_data.get("components", {})
+        component = components.get(str(register)) if isinstance(components, dict) else None
+        value = component.get("reportedValue") if isinstance(component, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    def _compute(self, spec: dict[str, Any]) -> float | None:
+        formula = spec.get("formula")
+        if formula == "thermal_power":
+            a, b = self._raw(spec["minuend"]), self._raw(spec["subtrahend"])
+            if a is None or b is None:
+                return None
+            delta = (a - b) * float(spec.get("factor", 1))
+            return max(delta, 0.0) * float(self._params.get("flow_m3h", 0)) * WATER_KWH_PER_M3_K
+        if formula == "electric_power":
+            current = self._raw(spec["current"])
+            if current is None:
+                return None
+            amps = current * float(spec.get("factor", 1))
+            volts = float(self._params.get("voltage", 0))
+            phases = int(self._params.get("phases", 1))
+            pf = float(self._params.get("power_factor", 1))
+            return amps * volts * (3**0.5 if phases == 3 else 1.0) * pf / 1000.0
+        if formula == "cop":
+            table = DeviceIdentifier.get_feature(self.device_data, "estimated_sensors", {})
+            thermal = self._compute(table[spec["thermal"]]) if spec.get("thermal") in table else None
+            electric = self._compute(table[spec["electric"]]) if spec.get("electric") in table else None
+            if thermal is None or electric is None or electric < 0.3:
+                # Below ~0.3 kW the compressor is off: no meaningful COP.
+                return None
+            return thermal / electric
+        return None
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the estimate, or None while an input is missing."""
+        value = self._compute(self._spec)
+        return round(value, 3) if value is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Show the assumptions so the number can be judged."""
+        return {"assumptions": dict(self._params), "estimate": True}

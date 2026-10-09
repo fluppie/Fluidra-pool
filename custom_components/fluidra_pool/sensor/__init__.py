@@ -26,8 +26,10 @@ from .device import (
     FluidraCompressorHoursSensor,
     FluidraCompressorModulationSensor,
     FluidraDecodedRegisterSensor,
+    FluidraDerivedRegisterSensor,
     FluidraDeviceBatterySensor,
     FluidraDeviceInfoSensor,
+    FluidraEstimatedSensor,
     FluidraHeatPumpActivitySensor,
     FluidraLightBrightnessSensor,
     FluidraPumpActivitySensor,
@@ -169,6 +171,25 @@ async def async_setup_entry(
                 FluidraDecodedRegisterSensor(coordinator, coordinator.api, pool_id, device_id, int(register), spec)
                 for register, spec in decoded.items()
                 if isinstance(spec, dict) and isinstance(register, int) and not isinstance(register, bool)
+            )
+
+        # Differences between two registers a profile declares (e.g. water delta T).
+        derived = DeviceIdentifier.get_feature(device, "derived_sensors", {})
+        if isinstance(derived, dict):
+            entities.extend(
+                FluidraDerivedRegisterSensor(coordinator, coordinator.api, pool_id, device_id, str(key), spec)
+                for key, spec in derived.items()
+                if isinstance(spec, dict) and "minuend" in spec and "subtrahend" in spec
+            )
+
+        # Estimated power / COP from live registers and profile assumptions.
+        estimated = DeviceIdentifier.get_feature(device, "estimated_sensors", {})
+        params = DeviceIdentifier.get_feature(device, "estimate_params", {})
+        if isinstance(estimated, dict) and isinstance(params, dict):
+            entities.extend(
+                FluidraEstimatedSensor(coordinator, coordinator.api, pool_id, device_id, str(key), spec, params)
+                for key, spec in estimated.items()
+                if isinstance(spec, dict) and "formula" in spec
             )
 
         # Undecoded registers a profile wants logged (reverse-engineering aid).

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Z250iQ / Z260iQ: delta T, condenser approach, and estimated power / COP.** `Water delta T`
+  (outlet c69 minus inlet c19) and `Condenser approach` (condensing c74 minus outlet) come from a
+  profile-declared `derived_sensors` table. `Thermal power (estimated)`, `Electric power
+  (estimated)` and `COP (estimated)` come from `estimated_sensors` plus `estimate_params` (flow
+  8 m³/h as Fluidra recommends, 400 V three-phase, cos φ 0.9); the assumptions are exposed as
+  attributes and the names say "estimated" because they are not meter readings.
 - **Z250iQ / Z260iQ: ten decoded live registers as sensors.** From a 6-hour trace on a Z250iQ TD9
   (firmware 2.5.0): compressor modulation (c60, %), suction temperature (c62), compressor frequency
   (c64, Hz), fan speed (c65, rpm), evaporator temperature (c66), outlet water temperature (c69),
